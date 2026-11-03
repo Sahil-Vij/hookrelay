@@ -5,9 +5,11 @@ import { verifySignature } from "./signature.ts";
 export interface AppConfig {
   store: Store;
   secrets: Map<string, string>;
+  /** Source name to forwarding URL. Sources without one are stored only. */
+  targets?: Map<string, string>;
 }
 
-export function createApp({ store, secrets }: AppConfig) {
+export function createApp({ store, secrets, targets = new Map() }: AppConfig) {
   const app = express();
   app.disable("x-powered-by");
 
@@ -33,6 +35,7 @@ export function createApp({ store, secrets }: AppConfig) {
       idempotencyKey: req.get("idempotency-key"),
       contentType: req.get("content-type"),
       body,
+      targetUrl: targets.get(source),
     });
     res.status(duplicate ? 200 : 202).json({ id, duplicate });
   });
