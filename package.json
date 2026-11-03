@@ -1,0 +1,13 @@
+{
+  "name": "hookrelay",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A self-hosted webhook inbox with signature checks and deduplication.",
+  "license": "MIT",
+  "workspaces": ["server"],
+  "scripts": {
+    "dev": "npm run dev -w server",
+    "test": "npm test --workspaces",
+    "typecheck": "npm run typecheck --workspaces"
+  }
+}
