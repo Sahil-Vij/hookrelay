@@ -46,7 +46,7 @@ Set `HOOKRELAY_TARGETS` to forward a source's new events to your app. Each reque
 `x-hookrelay-signature`, and `x-hookrelay-event-id`, `x-hookrelay-source` and `x-hookrelay-attempt` headers.
 
 A `2xx` response counts as delivered. Anything else, including a redirect, a timeout or a network error, is retried with
-exponential backoff and jitter, up to 12 attempts over roughly 1.5 to 3 hours. After that the delivery is marked `failed`,
+exponential backoff and jitter, up to 12 attempts over roughly 1 to 2.5 hours. After that the delivery is marked `failed`,
 and the event stays stored.
 
 **Delivery is at-least-once.** If the process dies after your app responds but before the result is saved, the event is
