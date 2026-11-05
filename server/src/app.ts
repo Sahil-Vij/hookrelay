@@ -1,4 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from "express";
+import { createApiRouter } from "./api.ts";
 import type { Store } from "./db.ts";
 import { verifySignature } from "./signature.ts";
 
@@ -7,15 +8,19 @@ export interface AppConfig {
   secrets: Map<string, string>;
   /** Source name to forwarding URL. Sources without one are stored only. */
   targets?: Map<string, string>;
+  /** Bearer token for the events API. */
+  apiKey: string;
 }
 
-export function createApp({ store, secrets, targets = new Map() }: AppConfig) {
+export function createApp({ store, secrets, targets = new Map(), apiKey }: AppConfig) {
   const app = express();
   app.disable("x-powered-by");
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
   });
+
+  app.use("/api", createApiRouter({ store, apiKey }));
 
   // Keep the exact bytes: signatures are over the raw body, and re-serialising JSON would break them.
   app.post("/hooks/:source", express.raw({ type: () => true, limit: "1mb" }), (req, res) => {

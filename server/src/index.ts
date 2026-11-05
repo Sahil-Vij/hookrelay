@@ -15,11 +15,13 @@ const port = Number(process.env.PORT ?? 4000);
 const store = openStore(process.env.DATABASE_PATH ?? "hookrelay.db");
 const secrets = loadMap("HOOKRELAY_SECRETS", true);
 const targets = loadMap("HOOKRELAY_TARGETS", false);
+const apiKey = process.env.HOOKRELAY_API_KEY;
+if (!apiKey) throw new Error("Set HOOKRELAY_API_KEY (see .env.example)");
 
 const worker = createDeliveryWorker({ store, secrets });
 worker.start();
 
-const server = createApp({ store, secrets, targets }).listen(port, () => {
+const server = createApp({ store, secrets, targets, apiKey }).listen(port, () => {
   console.log(`hookrelay listening on http://localhost:${port}`);
 });
 
