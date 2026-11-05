@@ -12,7 +12,7 @@ let server: Server;
 let base: string;
 
 before(async () => {
-  server = createApp({ store, secrets: new Map([["demo", SECRET]]) }).listen(0);
+  server = createApp({ store, secrets: new Map([["demo", SECRET]]), apiKey: "test-key" }).listen(0);
   await new Promise((resolve) => server.once("listening", resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });

@@ -13,6 +13,7 @@ Early and under active development. See [issues](../../issues) for the roadmap.
 | HMAC signature verification on raw bytes | Done |
 | Idempotent storage, safe under concurrent retries | Done |
 | Forwarding with retries and exponential backoff | Done |
+| Authenticated events API | Done |
 | React dashboard with search and replay | Planned |
 | Postgres and Docker Compose | Planned |
 
@@ -53,12 +54,38 @@ and the event stays stored.
 sent again, so use `x-hookrelay-event-id` to ignore repeats. Run a single worker for now, as multiple workers could send
 the same event at once.
 
+## Events API
+
+Payloads can hold customer data, so every `/api` route needs the key from `HOOKRELAY_API_KEY`, and the server won't start
+without one. Generate it with `openssl rand -hex 32`.
+
+```sh
+curl localhost:4000/api/events -H "authorization: Bearer $HOOKRELAY_API_KEY"
+curl localhost:4000/api/events/1 -H "authorization: Bearer $HOOKRELAY_API_KEY"
+```
+
+`GET /api/events` returns events newest first, without bodies, and takes these optional query parameters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `source` | Only this source |
+| `status` | Only deliveries that are `pending`, `delivered` or `failed` |
+| `limit` | Page size from 1 to 100, default 50 |
+| `before` | Pass the previous page's `nextCursor` to get the next page |
+
+`GET /api/events/:id` adds the body. Text comes back with `bodyEncoding: "utf8"`, and anything that isn't valid UTF-8 comes
+back with `bodyEncoding: "base64"`, so the original bytes are never altered.
+
+`delivery` is `null` for a source with no forwarding target. A `null` `nextAttemptAt` on a pending delivery means it's due
+now.
+
 ## Design notes
 
 - **Raw bytes:** the signature is checked before any parsing, because re-serialising JSON changes the bytes.
 - **Database-level dedupe:** a `UNIQUE` constraint decides, so concurrent retries can't both insert.
 - **Constant-time comparison:** response timing can't reveal how close a forged signature was.
 - **Same transaction:** an event and its delivery are saved together, so a stored event can't miss being forwarded.
+- **Cursor paging:** paging by id stays stable while new events arrive, where an offset would repeat rows.
 - **Retries survive restarts:** retry state lives in the database, not in memory.
 
 ## Development
