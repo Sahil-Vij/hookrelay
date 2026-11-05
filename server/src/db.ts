@@ -28,6 +28,31 @@ export interface DeliveryState {
   lastError: string | null;
 }
 
+export type DeliveryStatus = DeliveryState["status"];
+
+export interface EventSummary {
+  id: number;
+  source: string;
+  idempotencyKey: string;
+  contentType: string | null;
+  receivedAt: string;
+  byteLength: number;
+  /** Null when the source has no forwarding target. */
+  delivery: DeliveryState | null;
+}
+
+export interface EventDetail extends EventSummary {
+  body: Buffer;
+}
+
+export interface EventFilter {
+  source?: string;
+  status?: DeliveryStatus;
+  /** Only events with an id below this one, for paging backwards through history. */
+  beforeId?: number;
+  limit: number;
+}
+
 export interface AttemptResult {
   attempts: number;
   statusCode: number | null;
@@ -42,7 +67,30 @@ export interface Store {
   markRetry(id: number, result: AttemptResult, nextAttemptAt: number): void;
   markFailed(id: number, result: AttemptResult): void;
   getDelivery(eventId: number): DeliveryState | undefined;
+  /** Newest first, without bodies, so a page stays small however large the payloads are. */
+  listEvents(filter: EventFilter): EventSummary[];
+  getEvent(id: number): EventDetail | undefined;
   close(): void;
+}
+
+const EVENT_COLUMNS = `
+  e.id, e.source, e.idempotency_key AS idempotencyKey, e.content_type AS contentType,
+  e.received_at AS receivedAt, LENGTH(e.body) AS byteLength,
+  d.status, d.attempts, d.next_attempt_at AS nextAttemptAt,
+  d.last_status_code AS lastStatusCode, d.last_error AS lastError
+`;
+
+type EventRow = Omit<EventSummary, "delivery"> & { [K in keyof DeliveryState]: DeliveryState[K] | null };
+
+function toSummary(row: EventRow): EventSummary {
+  const { status, attempts, nextAttemptAt, lastStatusCode, lastError, ...event } = row;
+  return {
+    ...event,
+    delivery:
+      status === null
+        ? null
+        : { status, attempts: attempts as number, nextAttemptAt: nextAttemptAt as number, lastStatusCode, lastError },
+  };
 }
 
 export function openStore(path: string): Store {
@@ -95,8 +143,22 @@ export function openStore(path: string): Store {
            last_status_code AS lastStatusCode, last_error AS lastError
     FROM deliveries WHERE event_id = ?
   `);
+  const selectEvents = db.prepare(`
+    SELECT ${EVENT_COLUMNS}
+    FROM events e LEFT JOIN deliveries d ON d.event_id = e.id
+    WHERE (:source IS NULL OR e.source = :source)
+      AND (:status IS NULL OR d.status = :status)
+      AND (:beforeId IS NULL OR e.id < :beforeId)
+    ORDER BY e.id DESC
+    LIMIT :limit
+  `);
+  const selectEvent = db.prepare(`
+    SELECT ${EVENT_COLUMNS}, e.body
+    FROM events e LEFT JOIN deliveries d ON d.event_id = e.id
+    WHERE e.id = ?
+  `);
 
-  const finish = (status: DeliveryState["status"], id: number, result: AttemptResult, nextAttemptAt = 0) => {
+  const finish = (status: DeliveryStatus, id: number, result: AttemptResult, nextAttemptAt = 0) => {
     updateDelivery.run(status, result.attempts, nextAttemptAt, result.statusCode, result.error, id);
   };
 
@@ -125,6 +187,21 @@ export function openStore(path: string): Store {
     markRetry: (id, result, nextAttemptAt) => finish("pending", id, result, nextAttemptAt),
     markFailed: (id, result) => finish("failed", id, result),
     getDelivery: (eventId) => selectDelivery.get(eventId) as DeliveryState | undefined,
+    listEvents({ source, status, beforeId, limit }) {
+      const rows = selectEvents.all({
+        source: source ?? null,
+        status: status ?? null,
+        beforeId: beforeId ?? null,
+        limit,
+      });
+      return (rows as unknown as EventRow[]).map(toSummary);
+    },
+    getEvent(id) {
+      const row = selectEvent.get(id) as unknown as (EventRow & { body: Uint8Array }) | undefined;
+      if (!row) return undefined;
+      const { body, ...rest } = row;
+      return { ...toSummary(rest), body: Buffer.from(body) };
+    },
     close: () => db.close(),
   };
 }
