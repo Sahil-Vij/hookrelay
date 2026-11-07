@@ -2,7 +2,7 @@
 
 A self-hosted webhook inbox. Payment gateways, stores and shipping providers send webhooks once and move on, so a bad
 deploy can silently lose events. hookrelay receives them safely, stores each one once, and keeps retrying delivery to your
-app until it succeeds. Replay and a dashboard are coming next.
+app until it succeeds. A React dashboard shows every event and its delivery status. Replay is coming next.
 
 ## Status
 
@@ -14,7 +14,8 @@ Early and under active development. See [issues](../../issues) for the roadmap.
 | Idempotent storage, safe under concurrent retries | Done |
 | Forwarding with retries and exponential backoff | Done |
 | Authenticated events API | Done |
-| React dashboard with search and replay | Planned |
+| Dashboard: sign in, live event list, filters | Done |
+| Dashboard: event detail, paging and replay | Planned |
 | Postgres and Docker Compose | Planned |
 
 ## Try it
@@ -40,6 +41,18 @@ curl -i localhost:4000/hooks/demo -H "x-hookrelay-signature: $SIG" -H "idempoten
 | `401` | Signature missing or wrong |
 | `404` | Unknown source |
 | `413` | Body over 1 MB |
+
+## Dashboard
+
+With the server running, start the dashboard in a second terminal and sign in with your `HOOKRELAY_API_KEY`:
+
+```sh
+npm run dev:web
+```
+
+It opens on http://localhost:5173 and proxies `/api` to the server, so both are on one origin. The list refreshes every
+five seconds. The key is kept in `sessionStorage`, so it's forgotten when the tab closes, and you're sent back to sign in
+if the key changes on the server.
 
 ## Forwarding
 
