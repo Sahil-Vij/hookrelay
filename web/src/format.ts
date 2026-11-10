@@ -20,6 +20,45 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
+/** Removes whitespace between JSON tokens, leaving strings untouched. */
+function stripJsonWhitespace(json: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (const ch of json) {
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') {
+      inString = true;
+      out += ch;
+    } else if (ch !== " " && ch !== "\n" && ch !== "\r" && ch !== "\t") {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+/**
+ * Pretty-prints a JSON body. Re-serialising can change what was received: big numbers lose precision, duplicate
+ * keys collapse and escapes are rewritten. `lossless` says whether the formatted text means exactly the same bytes,
+ * so the UI can avoid showing a misleading version by default.
+ */
+export function formatJson(raw: string): { formatted: string; lossless: boolean } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  return {
+    formatted: JSON.stringify(parsed, null, 2),
+    lossless: JSON.stringify(parsed) === stripJsonWhitespace(raw),
+  };
+}
+
+const dateTime =new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
 
 export const formatDateTime = (iso: string) => dateTime.format(new Date(iso));

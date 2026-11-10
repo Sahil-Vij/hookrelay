@@ -20,6 +20,12 @@ export interface EventSummary {
   delivery: Delivery | null;
 }
 
+export interface EventDetail extends EventSummary {
+  body: string;
+  /** "base64" when the body wasn't valid UTF-8, so the bytes are never altered. */
+  bodyEncoding: "utf8" | "base64";
+}
+
 export interface EventPage {
   events: EventSummary[];
   nextCursor: number | null;
@@ -29,6 +35,8 @@ export interface EventFilters {
   source?: string;
   status?: DeliveryStatus;
   limit?: number;
+  /** The previous page's nextCursor. */
+  before?: number;
 }
 
 export class UnauthorizedError extends Error {
@@ -60,6 +68,17 @@ export function listEvents(apiKey: string, filters: EventFilters = {}, signal?: 
   if (filters.source) params.set("source", filters.source);
   if (filters.status) params.set("status", filters.status);
   if (filters.limit) params.set("limit", String(filters.limit));
+  if (filters.before) params.set("before", String(filters.before));
   const query = params.size > 0 ? `?${params}` : "";
   return request<EventPage>(`/api/events${query}`, apiKey, signal);
 }
+
+export function getEvent(apiKey: string, id: number, signal?: AbortSignal) {
+  return request<EventDetail>(`/api/events/${id}`, apiKey, signal);
+}
+
+export const isNotFound = (error: unknown) => error instanceof ApiError && error.status === 404;
+
+/** Retrying won't fix a rejected key or a missing event, so only retry other failures. */
+export const shouldRetry = (failureCount: number, error: unknown) =>
+  !(error instanceof UnauthorizedError) && !isNotFound(error) && failureCount < 2;

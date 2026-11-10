@@ -14,8 +14,8 @@ Early and under active development. See [issues](../../issues) for the roadmap.
 | Idempotent storage, safe under concurrent retries | Done |
 | Forwarding with retries and exponential backoff | Done |
 | Authenticated events API | Done |
-| Dashboard: sign in, live event list, filters | Done |
-| Dashboard: event detail, paging and replay | Planned |
+| Dashboard: live event list, filters, paging and event detail | Done |
+| Replay from the dashboard | Planned |
 | Postgres and Docker Compose | Planned |
 
 ## Try it
@@ -53,6 +53,11 @@ npm run dev:web
 It opens on http://localhost:5173 and proxies `/api` to the server, so both are on one origin. The list refreshes every
 five seconds. The key is kept in `sessionStorage`, so it's forgotten when the tab closes, and you're sent back to sign in
 if the key changes on the server.
+
+Click an event to see its idempotency key, content type, delivery state and body. Each event has its own link (`#/events/42`), and the back
+button returns to the list with your filters and loaded pages intact. JSON bodies are formatted only when formatting
+keeps the exact meaning. A body with numbers too large for JavaScript or with duplicate keys is shown raw by default,
+because pretty-printing it would show you something other than what was received.
 
 ## Forwarding
 
