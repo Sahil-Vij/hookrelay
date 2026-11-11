@@ -15,7 +15,8 @@ Early and under active development. See [issues](../../issues) for the roadmap.
 | Forwarding with retries and exponential backoff | Done |
 | Authenticated events API | Done |
 | Dashboard: live event list, filters, paging and event detail | Done |
-| Replay from the dashboard | Planned |
+| Replay API | Done |
+| Replay button in the dashboard | Planned |
 | Postgres and Docker Compose | Planned |
 
 ## Try it
@@ -96,6 +97,25 @@ back with `bodyEncoding: "base64"`, so the original bytes are never altered.
 
 `delivery` is `null` for a source with no forwarding target. A `null` `nextAttemptAt` on a pending delivery means it's due
 now.
+
+### Replay
+
+`POST /api/events/:id/replay` sends a stored event again, for example after fixing a bug that made your app reject it.
+
+```sh
+curl -X POST localhost:4000/api/events/1/replay -H "authorization: Bearer $HOOKRELAY_API_KEY"
+```
+
+| Response | Meaning |
+| --- | --- |
+| `202` | Queued. The delivery is pending again with a fresh set of 12 attempts. |
+| `409` `already_pending` | It's still being delivered, so replaying now could send it twice at once |
+| `409` `no_target` | The source has no forwarding target |
+| `404` | No such event |
+
+A replay goes to the source's current target, so it reaches your app where it runs now. It carries the same body and the
+same `x-hookrelay-event-id`. If your app skips ids it has already processed, it will skip a replay too. That's usually
+right, because a replay is for events your app failed to handle.
 
 ## Design notes
 
