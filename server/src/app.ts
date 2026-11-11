@@ -20,7 +20,7 @@ export function createApp({ store, secrets, targets = new Map(), apiKey }: AppCo
     res.json({ status: "ok" });
   });
 
-  app.use("/api", createApiRouter({ store, apiKey }));
+  app.use("/api", createApiRouter({ store, apiKey, targets }));
 
   // Keep the exact bytes: signatures are over the raw body, and re-serialising JSON would break them.
   app.post("/hooks/:source", express.raw({ type: () => true, limit: "1mb" }), (req, res) => {

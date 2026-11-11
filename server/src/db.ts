@@ -70,8 +70,15 @@ export interface Store {
   /** Newest first, without bodies, so a page stays small however large the payloads are. */
   listEvents(filter: EventFilter): EventSummary[];
   getEvent(id: number): EventDetail | undefined;
+  /**
+   * Queues an event to be sent again to `targetUrl`, with a fresh retry budget. Refuses while a delivery is still
+   * pending, so a replay can't race the worker into sending the same event twice at once.
+   */
+  replay(eventId: number, targetUrl: string): ReplayResult;
   close(): void;
 }
+
+export type ReplayResult = "queued" | "not_found" | "already_pending";
 
 const EVENT_COLUMNS = `
   e.id, e.source, e.idempotency_key AS idempotencyKey, e.content_type AS contentType,
@@ -158,8 +165,32 @@ export function openStore(path: string): Store {
     WHERE e.id = ?
   `);
 
+  const eventExists = db.prepare("SELECT 1 FROM events WHERE id = ?");
+  const deliveryExists = db.prepare("SELECT 1 FROM deliveries WHERE event_id = ?");
+  // The status check is in the WHERE clause, so checking and resetting is one atomic step.
+  const requeueDelivery = db.prepare(`
+    UPDATE deliveries
+    SET status = 'pending', target_url = ?, attempts = 0, next_attempt_at = 0,
+        last_status_code = NULL, last_error = NULL
+    WHERE event_id = ? AND status <> 'pending'
+    RETURNING id
+  `);
+
   const finish = (status: DeliveryStatus, id: number, result: AttemptResult, nextAttemptAt = 0) => {
     updateDelivery.run(status, result.attempts, nextAttemptAt, result.statusCode, result.error, id);
+  };
+
+  // IMMEDIATE takes the write lock up front, so two writers can't both read and then both write.
+  const transaction = <T>(fn: () => T): T => {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn();
+      db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   };
 
   return {
@@ -167,17 +198,22 @@ export function openStore(path: string): Store {
       // Without a sender-supplied key, identical bodies count as the same event.
       const key = idempotencyKey ?? `sha256:${createHash("sha256").update(body).digest("hex")}`;
       // One transaction, so a stored event can never be left without its delivery.
-      db.exec("BEGIN IMMEDIATE");
-      try {
+      return transaction(() => {
         const inserted = insertEvent.get(source, key, contentType ?? null, body) as { id: number } | undefined;
         const id = Number(inserted ? inserted.id : (findEvent.get(source, key) as { id: number }).id);
         if (inserted && targetUrl) insertDelivery.run(id, targetUrl);
-        db.exec("COMMIT");
         return { id, duplicate: !inserted };
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
+      });
+    },
+    replay(eventId, targetUrl) {
+      return transaction(() => {
+        if (!eventExists.get(eventId)) return "not_found";
+        if (requeueDelivery.get(targetUrl, eventId)) return "queued";
+        if (deliveryExists.get(eventId)) return "already_pending";
+        // Stored before its source had a target, so this is its first delivery.
+        insertDelivery.run(eventId, targetUrl);
+        return "queued";
+      });
     },
     dueDeliveries(now, limit) {
       const rows = selectDue.all(now, limit) as unknown as (Omit<DueDelivery, "body"> & { body: Uint8Array })[];

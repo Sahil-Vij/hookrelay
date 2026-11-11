@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
-import type { DeliveryState, DeliveryStatus, EventSummary, Store } from "./db.ts";
+import type { DeliveryState, DeliveryStatus, EventDetail, EventSummary, Store } from "./db.ts";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -50,7 +50,14 @@ const serializeEvent = <T extends EventSummary>(event: T) => ({
   delivery: serializeDelivery(event.delivery),
 });
 
-export function createApiRouter({ store, apiKey }: { store: Store; apiKey: string }) {
+interface ApiConfig {
+  store: Store;
+  apiKey: string;
+  /** Source name to forwarding URL, used when replaying. */
+  targets?: Map<string, string>;
+}
+
+export function createApiRouter({ store, apiKey, targets = new Map() }: ApiConfig) {
   // An empty key would match an empty token, so refuse to run with an open API.
   if (!apiKey) throw new Error("apiKey must not be empty");
 
@@ -101,6 +108,29 @@ export function createApiRouter({ store, apiKey }: { store: Store; apiKey: strin
     }
     const { body, ...rest } = event;
     res.json({ ...serializeEvent(rest), ...encodeBody(body) });
+  });
+
+  // Auth is a bearer header rather than a cookie, so another site can't trigger this from a user's browser.
+  router.post("/events/:id/replay", (req, res) => {
+    const id = parseId(req.params.id);
+    const event = id === undefined ? undefined : store.getEvent(id);
+    if (!event) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    // The current target, so a replay reaches the app where it runs now, not where it ran when the event arrived.
+    const target = targets.get(event.source);
+    if (target === undefined) {
+      res.status(409).json({ error: "no_target" });
+      return;
+    }
+    const result = store.replay(event.id, target);
+    if (result !== "queued") {
+      res.status(result === "not_found" ? 404 : 409).json({ error: result });
+      return;
+    }
+    const { body: _body, ...queued } = store.getEvent(event.id) as EventDetail;
+    res.status(202).json(serializeEvent(queued));
   });
 
   router.use((_req, res) => {
