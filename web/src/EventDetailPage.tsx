@@ -1,6 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
-import { getEvent, isNotFound, UnauthorizedError, type EventDetail } from "./api.ts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useRef, useState } from "react";
+import { ApiError, getEvent, isNotFound, replayEvent, UnauthorizedError, type EventDetail } from "./api.ts";
 import { deliveryLabel, formatBytes, formatDateTime, formatJson } from "./format.ts";
 import { listHref } from "./route.ts";
 
@@ -52,9 +52,90 @@ export function EventDetailPage({ apiKey, id, onUnauthorized }: Props) {
           </div>
         )
       ) : (
-        <EventDetails event={query.data} />
+        <>
+          {/* Keyed so a message about one event never shows on another. */}
+          <ReplayControl key={id} apiKey={apiKey} event={query.data} onUnauthorized={onUnauthorized} />
+          <EventDetails event={query.data} />
+        </>
       )}
     </main>
+  );
+}
+
+function replayErrorMessage(error: unknown, source: string) {
+  if (error instanceof ApiError) {
+    if (error.code === "already_pending") return "This event is already being delivered. Replay it once that finishes.";
+    if (error.code === "no_target")
+      return `The "${source}" source has no target URL, so there's nowhere to send it. Add one to HOOKRELAY_TARGETS and try again.`;
+    if (error.status === 404) return "This event doesn't exist any more.";
+  }
+  return "Couldn't replay this event. Try again.";
+}
+
+interface ReplayProps {
+  apiKey: string;
+  event: EventDetail;
+  onUnauthorized: () => void;
+}
+
+function ReplayControl({ apiKey, event, onUnauthorized }: ReplayProps) {
+  const queryClient = useQueryClient();
+  const hintId = useId();
+  const [message, setMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+
+  const replay = useMutation({
+    mutationFn: () => replayEvent(apiKey, event.id),
+    onMutate: () => setMessage(null),
+    onSuccess: (queued) => {
+      // Show the new pending state now; the page keeps polling while it's pending.
+      queryClient.setQueryData<EventDetail>(["event", event.id], (old) => old && { ...old, ...queued });
+      setMessage({ tone: "success", text: "Replay queued. It goes to the source's current target." });
+    },
+    onError: (error) => {
+      if (error instanceof UnauthorizedError) {
+        onUnauthorized();
+        return;
+      }
+      setMessage({ tone: "error", text: replayErrorMessage(error, event.source) });
+      // Another tab may have replayed it, so show where it is now.
+      if (error instanceof ApiError && error.code === "already_pending") {
+        void queryClient.invalidateQueries({ queryKey: ["event", event.id] });
+      }
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["events"] }),
+  });
+
+  const inProgress = event.delivery?.status === "pending";
+  const unavailable = inProgress || replay.isPending;
+
+  return (
+    <div className="replay">
+      <div className="replay-actions">
+        {/*
+          aria-disabled rather than disabled: a disabled button drops focus to the page
+          the moment it's clicked, and can't be reached to learn why it's unavailable.
+        */}
+        <button
+          type="button"
+          aria-disabled={unavailable}
+          aria-describedby={inProgress ? hintId : undefined}
+          onClick={() => {
+            if (!unavailable) replay.mutate();
+          }}
+        >
+          {replay.isPending ? "Replaying…" : "Replay"}
+        </button>
+        {inProgress && (
+          <span id={hintId} className="hint">
+            Available once the current delivery finishes.
+          </span>
+        )}
+      </div>
+      {/* Always rendered, so screen readers are already watching it when the message arrives. */}
+      <p role="status" className={message ? message.tone : undefined}>
+        {message?.text}
+      </p>
+    </div>
   );
 }
 

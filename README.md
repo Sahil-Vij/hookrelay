@@ -2,7 +2,7 @@
 
 A self-hosted webhook inbox. Payment gateways, stores and shipping providers send webhooks once and move on, so a bad
 deploy can silently lose events. hookrelay receives them safely, stores each one once, and keeps retrying delivery to your
-app until it succeeds. A React dashboard shows every event and its delivery status. Replay is coming next.
+app until it succeeds. A React dashboard shows every event and its delivery status, and resends any event with one click.
 
 ## Status
 
@@ -16,7 +16,7 @@ Early and under active development. See [issues](../../issues) for the roadmap.
 | Authenticated events API | Done |
 | Dashboard: live event list, filters, paging and event detail | Done |
 | Replay API | Done |
-| Replay button in the dashboard | Planned |
+| Replay button in the dashboard | Done |
 | Postgres and Docker Compose | Planned |
 
 ## Try it
@@ -59,6 +59,10 @@ Click an event to see its idempotency key, content type, delivery state and body
 button returns to the list with your filters and loaded pages intact. JSON bodies are formatted only when formatting
 keeps the exact meaning. A body with numbers too large for JavaScript or with duplicate keys is shown raw by default,
 because pretty-printing it would show you something other than what was received.
+
+The Replay button on an event's page queues it again (see [Replay](#replay)). The status changes to Pending straight
+away and updates as the worker sends it. While a delivery is in progress the button is unavailable, and if the server
+refuses a replay, for example because the source has no target, the page says why.
 
 ## Forwarding
 
