@@ -41,14 +41,16 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 /** A fake API that checks the key and records each request URL. */
-function mockApi(respond: (url: URL) => Response | Promise<Response> = () => json({ events, nextCursor: null })) {
+function mockApi(
+  respond: (url: URL, method: string) => Response | Promise<Response> = () => json({ events, nextCursor: null }),
+) {
   const urls: URL[] = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
     urls.push(url);
     const auth = new Headers(init?.headers).get("authorization");
     if (auth !== `Bearer ${KEY}`) return json({ error: "unauthorized" }, 401);
-    return respond(url);
+    return respond(url, init?.method ?? "GET");
   });
   vi.stubGlobal("fetch", fetchMock);
   return { urls, fetchMock };
@@ -326,4 +328,109 @@ test("says when an event doesn't exist", async () => {
   detailApi({});
   renderApp();
   expect(await screen.findByText("This event doesn't exist.")).toBeTruthy();
+});
+
+const pending = { status: "pending", attempts: 0, nextAttemptAt: null, lastStatusCode: null, lastError: null } as const;
+
+/**
+ * Serves event 3 and its replay endpoint. Without `refuse`, a replay works like the server's:
+ * it resets the delivery to pending, and later reads see that.
+ */
+function replayApi(start: EventDetail, refuse?: () => Response) {
+  let current = start;
+  const replays: string[] = [];
+  const api = mockApi((url, method) => {
+    if (url.pathname === "/api/events/3/replay") {
+      replays.push(method);
+      if (refuse) return refuse();
+      current = { ...current, delivery: pending };
+      const { body: _body, bodyEncoding: _encoding, ...summary } = current;
+      return json(summary, 202);
+    }
+    if (url.pathname === "/api/events/3") return json(current);
+    return json({ events, nextCursor: null });
+  });
+  return { ...api, replays, setCurrent: (event: EventDetail) => (current = event) };
+}
+
+async function openReplay(start: EventDetail, refuse?: () => Response) {
+  openAt("#/events/3");
+  const api = replayApi(start, refuse);
+  renderApp();
+  const button = await screen.findByRole("button", { name: "Replay" });
+  // The list stays rendered but hidden behind the detail page, so look only at the detail page.
+  const view = within(button.closest("main") as HTMLElement);
+  return { ...api, button, view, user: userEvent.setup() };
+}
+
+test("replays a failed event and shows it as pending straight away", async () => {
+  const { button, view, user, replays } = await openReplay(detail());
+  expect(view.getByText("Failed")).toBeTruthy();
+
+  await user.click(button);
+  expect((await view.findByRole("status")).textContent).toMatch(/Replay queued/);
+  expect(replays).toEqual(["POST"]);
+  expect(view.getByText("Due now")).toBeTruthy();
+  expect(view.queryByText("Failed")).toBeNull();
+  expect(view.queryByText("HTTP 500")).toBeNull();
+
+  // Still focused and reachable, but it says why it can't be used again yet.
+  expect(document.activeElement).toBe(button);
+  expect(button.getAttribute("aria-disabled")).toBe("true");
+  expect(button.getAttribute("aria-describedby")).toBeTruthy();
+  expect(view.getByText("Available once the current delivery finishes.")).toBeTruthy();
+});
+
+test("can't replay while a delivery is still pending", async () => {
+  const { button, view, user, replays } = await openReplay(detail({ delivery: pending }));
+  expect(button.getAttribute("aria-disabled")).toBe("true");
+  await user.click(button);
+  await user.keyboard("{Enter}");
+  expect(replays).toEqual([]);
+  expect(view.getByRole("status").textContent).toBe("");
+});
+
+test("explains when the source has no target", async () => {
+  const { button, view, user } = await openReplay(detail(), () => json({ error: "no_target" }, 409));
+  await user.click(button);
+  const status = await view.findByRole("status");
+  await vi.waitFor(() => expect(status.textContent).toMatch(/"payments" source has no target URL/));
+  expect(status.textContent).toMatch(/HOOKRELAY_TARGETS/);
+  expect(button.getAttribute("aria-disabled")).toBe("false");
+});
+
+test("when someone else already replayed it, says so and shows the current state", async () => {
+  const api = await openReplay(detail(), () => json({ error: "already_pending" }, 409));
+  // Another tab replays it first, so the server's copy is pending.
+  api.setCurrent(detail({ delivery: pending }));
+
+  await api.user.click(api.button);
+  await vi.waitFor(() => expect(api.view.getByRole("status").textContent).toMatch(/already being delivered/));
+  expect(await api.view.findByText("Due now")).toBeTruthy();
+});
+
+test("shows a plain message when the replay fails for another reason", async () => {
+  const { button, view, user } = await openReplay(
+    detail(),
+    () => new Response("<h1>Bad gateway</h1>", { status: 502, headers: { "content-type": "text/html" } }),
+  );
+  await user.click(button);
+  await vi.waitFor(() => expect(view.getByRole("status").textContent).toBe("Couldn't replay this event. Try again."));
+  expect(view.getByText("Failed")).toBeTruthy();
+});
+
+test("goes back to sign in when the key is rejected during a replay", async () => {
+  const { button, user } = await openReplay(detail(), () => json({ error: "unauthorized" }, 401));
+  await user.click(button);
+  expect(await screen.findByText("Your API key was rejected. Sign in again.")).toBeTruthy();
+  expect(sessionStorage.length).toBe(0);
+});
+
+test("refreshes the event list after a replay", async () => {
+  const { button, view, user, urls } = await openReplay(detail());
+  const listLoads = () => urls.filter((u) => u.pathname === "/api/events").length;
+  const before = listLoads();
+  await user.click(button);
+  await view.findByText(/Replay queued/);
+  await vi.waitFor(() => expect(listLoads()).toBeGreaterThan(before));
 });

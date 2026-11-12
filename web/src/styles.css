@@ -95,9 +95,10 @@ button {
     border-color: var(--border);
   }
 
-  &:disabled {
+  &:disabled,
+  &[aria-disabled="true"] {
     opacity: 0.6;
-    cursor: progress;
+    cursor: not-allowed;
   }
 }
 
@@ -321,6 +322,38 @@ h2[tabindex="-1"]:focus:not(:focus-visible) {
   dd {
     margin: 0;
     overflow-wrap: anywhere;
+  }
+}
+
+.replay {
+  margin-bottom: 1rem;
+
+  .replay-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+  }
+
+  .hint {
+    margin: 0;
+  }
+
+  /* Never display: none, or screen readers stop watching it. Empty, it takes no space. */
+  [role="status"] {
+    margin: 0;
+
+    &:not(:empty) {
+      margin-top: 0.75rem;
+    }
+  }
+
+  .success {
+    font-size: 0.875rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    background: var(--success-bg);
+    color: var(--success-text);
   }
 }
 
