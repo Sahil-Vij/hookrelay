@@ -17,11 +17,15 @@ const secrets = loadMap("HOOKRELAY_SECRETS", true);
 const targets = loadMap("HOOKRELAY_TARGETS", false);
 const apiKey = process.env.HOOKRELAY_API_KEY;
 if (!apiKey) throw new Error("Set HOOKRELAY_API_KEY (see .env.example)");
+const toleranceSeconds = Number(process.env.HOOKRELAY_SIGNATURE_TOLERANCE_SECONDS ?? 300);
+if (!Number.isInteger(toleranceSeconds) || toleranceSeconds < 1) {
+  throw new Error("HOOKRELAY_SIGNATURE_TOLERANCE_SECONDS must be a whole number of seconds, 1 or more");
+}
 
 const worker = createDeliveryWorker({ store, secrets });
 worker.start();
 
-const server = createApp({ store, secrets, targets, apiKey }).listen(port, () => {
+const server = createApp({ store, secrets, targets, apiKey, toleranceSeconds }).listen(port, () => {
   console.log(`hookrelay listening on http://localhost:${port}`);
 });
 

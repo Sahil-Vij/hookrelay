@@ -1,7 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { createApiRouter } from "./api.ts";
 import type { Store } from "./db.ts";
-import { verifySignature } from "./signature.ts";
+import { DEFAULT_TOLERANCE_SECONDS, verifySignature } from "./signature.ts";
 
 export interface AppConfig {
   store: Store;
@@ -10,9 +10,19 @@ export interface AppConfig {
   targets?: Map<string, string>;
   /** Bearer token for the events API. */
   apiKey: string;
+  /** How old, or how far in the future, a signed timestamp may be. */
+  toleranceSeconds?: number;
+  now?: () => number;
 }
 
-export function createApp({ store, secrets, targets = new Map(), apiKey }: AppConfig) {
+export function createApp({
+  store,
+  secrets,
+  targets = new Map(),
+  apiKey,
+  toleranceSeconds = DEFAULT_TOLERANCE_SECONDS,
+  now = Date.now,
+}: AppConfig) {
   const app = express();
   app.disable("x-powered-by");
 
@@ -31,8 +41,16 @@ export function createApp({ store, secrets, targets = new Map(), apiKey }: AppCo
       return;
     }
     const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    if (!verifySignature(body, secret, req.get("x-hookrelay-signature"))) {
-      res.status(401).json({ error: "invalid_signature" });
+    const check = verifySignature(
+      body,
+      secret,
+      { signature: req.get("x-hookrelay-signature"), timestamp: req.get("x-hookrelay-timestamp") },
+      now(),
+      toleranceSeconds,
+    );
+    if (check !== "valid") {
+      // "expired" is only reported for a correctly signed request, so it tells a forger nothing.
+      res.status(401).json({ error: check === "expired" ? "expired_timestamp" : "invalid_signature" });
       return;
     }
     const { id, duplicate } = store.saveEvent({

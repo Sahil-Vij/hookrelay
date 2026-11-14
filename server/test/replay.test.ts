@@ -95,7 +95,11 @@ test("the worker sends a replayed event again, with the same id and bytes", asyn
   assert.equal(mine.length, 1);
   assert.equal(mine[0].url, TARGET);
   assert.equal(mine[0].body.toString(), store.getEvent(id)?.body.toString());
-  assert.ok(verifySignature(mine[0].body, SECRET, mine[0].headers.get("x-hookrelay-signature") ?? undefined));
+  const signed = {
+    signature: mine[0].headers.get("x-hookrelay-signature") ?? undefined,
+    timestamp: mine[0].headers.get("x-hookrelay-timestamp") ?? undefined,
+  };
+  assert.equal(verifySignature(mine[0].body, SECRET, signed, Date.now()), "valid");
   assert.equal(store.getDelivery(id)?.status, "delivered");
 });
 

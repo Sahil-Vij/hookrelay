@@ -23,10 +23,15 @@ after(() => {
 
 const post = (path: string, body: string, headers: Record<string, string> = {}) =>
   fetch(base + path, { method: "POST", body, headers });
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+const signatureHeaders = (body: string, timestamp = nowSeconds()) => ({
+  "x-hookrelay-signature": sign(Buffer.from(body), SECRET, timestamp),
+  "x-hookrelay-timestamp": String(timestamp),
+});
 const signed = (body: string, headers: Record<string, string> = {}, source = "demo") =>
   post(`/hooks/${source}`, body, {
     "content-type": "application/json",
-    "x-hookrelay-signature": sign(Buffer.from(body), SECRET),
+    ...signatureHeaders(body),
     ...headers,
   });
 
@@ -49,10 +54,44 @@ test("rejects a signature of a different length without throwing", async () => {
 });
 
 test("rejects a body changed after signing", async () => {
-  const res = await post("/hooks/demo", '{"amount":999}', {
-    "x-hookrelay-signature": sign(Buffer.from('{"amount":1}'), SECRET),
-  });
+  const res = await post("/hooks/demo", '{"amount":999}', signatureHeaders('{"amount":1}'));
   assert.equal(res.status, 401);
+});
+
+test("rejects a request signed more than five minutes ago, even with a valid signature", async () => {
+  const res = await post("/hooks/demo", "{}", signatureHeaders("{}", nowSeconds() - 301));
+  assert.equal(res.status, 401);
+  assert.deepEqual(await res.json(), { error: "expired_timestamp" });
+});
+
+test("rejects a timestamp more than five minutes in the future", async () => {
+  const res = await post("/hooks/demo", "{}", signatureHeaders("{}", nowSeconds() + 301));
+  assert.deepEqual(await res.json(), { error: "expired_timestamp" });
+});
+
+test("accepts a timestamp a little off, for clock drift", async () => {
+  assert.equal((await post("/hooks/demo", '{"drift":1}', signatureHeaders('{"drift":1}', nowSeconds() - 120))).status, 202);
+});
+
+test("rejects a fresh timestamp swapped onto an old signature", async () => {
+  const old = signatureHeaders("{}", nowSeconds() - 3600);
+  const res = await post("/hooks/demo", "{}", { ...old, "x-hookrelay-timestamp": String(nowSeconds()) });
+  assert.deepEqual(await res.json(), { error: "invalid_signature" });
+});
+
+test("rejects a missing or malformed timestamp as an invalid signature", async () => {
+  const { "x-hookrelay-signature": signature } = signatureHeaders("{}");
+  for (const timestamp of [undefined, "", "abc", "1.5", "-5", "9".repeat(13)]) {
+    const headers: Record<string, string> = { "x-hookrelay-signature": signature };
+    if (timestamp !== undefined) headers["x-hookrelay-timestamp"] = timestamp;
+    const res = await post("/hooks/demo", "{}", headers);
+    assert.deepEqual(await res.json(), { error: "invalid_signature" }, String(timestamp));
+  }
+});
+
+test("an expired timestamp is only reported for a correctly signed request", async () => {
+  const forged = { "x-hookrelay-signature": "sha256=" + "0".repeat(64), "x-hookrelay-timestamp": "1" };
+  assert.deepEqual(await (await post("/hooks/demo", "{}", forged)).json(), { error: "invalid_signature" });
 });
 
 test("verifies the exact bytes, not re-serialised JSON", async () => {
