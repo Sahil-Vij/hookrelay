@@ -76,7 +76,12 @@ test("sends the exact bytes with a signature the receiver can verify", async () 
   const headers = new Headers(init?.headers);
   const body = Buffer.from(init?.body as Uint8Array);
   assert.equal(body.toString(), '{"order":1}');
-  assert.ok(verifySignature(body, SECRET, headers.get("x-hookrelay-signature") ?? undefined));
+  const signed = {
+    signature: headers.get("x-hookrelay-signature") ?? undefined,
+    timestamp: headers.get("x-hookrelay-timestamp") ?? undefined,
+  };
+  assert.equal(signed.timestamp, "1000");
+  assert.equal(verifySignature(body, SECRET, signed, 1_000_000), "valid");
   assert.equal(headers.get("x-hookrelay-event-id"), String(id));
   assert.equal(headers.get("x-hookrelay-attempt"), "1");
   assert.equal(headers.get("content-type"), "application/json");
@@ -237,12 +242,14 @@ test("start polls in the background and stop ends it", async () => {
 test("delivers over real HTTP to a receiver", async () => {
   let received = "";
   let signature: string | undefined;
+  let timestamp: string | undefined;
   const target = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
       received = Buffer.concat(chunks).toString();
       signature = req.headers["x-hookrelay-signature"] as string;
+      timestamp = req.headers["x-hookrelay-timestamp"] as string;
       res.writeHead(200).end("ok");
     });
   }).listen(0);
@@ -257,9 +264,29 @@ test("delivers over real HTTP to a receiver", async () => {
 
     assert.equal(store.getDelivery(id)?.status, "delivered");
     assert.equal(received, '{"order":1}');
-    assert.ok(verifySignature(Buffer.from(received), SECRET, signature));
+    assert.equal(verifySignature(Buffer.from(received), SECRET, { signature, timestamp }, 1_000_000), "valid");
   } finally {
     target.close();
     target.closeAllConnections();
   }
+});
+
+test("each attempt is signed with the time it was sent, so late retries still verify", async () => {
+  const sent: Headers[] = [];
+  const { store, clock, worker } = setup(async (_url, init) => {
+    sent.push(new Headers(init?.headers));
+    return new Response(null, { status: sent.length === 1 ? 500 : 200 });
+  });
+  save(store);
+
+  await worker.runOnce();
+  clock.time += 2 * 3_600_000;
+  await worker.runOnce();
+
+  assert.equal(sent.length, 2);
+  const [first, second] = sent.map((h) => h.get("x-hookrelay-timestamp"));
+  assert.equal(first, "1000");
+  assert.equal(second, String(1000 + 2 * 3600));
+  const retry = { signature: sent[1]!.get("x-hookrelay-signature") ?? undefined, timestamp: second ?? undefined };
+  assert.equal(verifySignature(Buffer.from('{"order":1}'), SECRET, retry, clock.time), "valid");
 });

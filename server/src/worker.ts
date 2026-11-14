@@ -47,8 +47,11 @@ export function createDeliveryWorker(config: WorkerConfig) {
     const secret = secrets.get(delivery.source);
     if (secret === undefined) return { statusCode: null, error: `no secret for source ${delivery.source}` };
 
+    // A fresh timestamp on every attempt, so a retry hours later still passes the receiver's freshness check.
+    const timestamp = Math.floor(now() / 1000);
     const headers: Record<string, string> = {
-      "x-hookrelay-signature": sign(delivery.body, secret),
+      "x-hookrelay-signature": sign(delivery.body, secret, timestamp),
+      "x-hookrelay-timestamp": String(timestamp),
       "x-hookrelay-event-id": String(delivery.eventId),
       "x-hookrelay-source": delivery.source,
       "x-hookrelay-attempt": String(delivery.attempts + 1),
