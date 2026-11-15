@@ -41,10 +41,11 @@ export function createApp({
       return;
     }
     const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const signature = req.get("x-hookrelay-signature");
     const check = verifySignature(
       body,
       secret,
-      { signature: req.get("x-hookrelay-signature"), timestamp: req.get("x-hookrelay-timestamp") },
+      { signature, timestamp: req.get("x-hookrelay-timestamp") },
       now(),
       toleranceSeconds,
     );
@@ -58,6 +59,7 @@ export function createApp({
       idempotencyKey: req.get("idempotency-key"),
       contentType: req.get("content-type"),
       body,
+      signature,
       targetUrl: targets.get(source),
     });
     res.status(duplicate ? 200 : 202).json({ id, duplicate });
