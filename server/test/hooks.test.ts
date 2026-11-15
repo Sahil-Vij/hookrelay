@@ -120,6 +120,34 @@ test("without a key, identical bodies dedupe and different bodies don't", async 
   assert.notEqual((await (await signed('{"hash":2}')).json()).id, first.id);
 });
 
+test("a captured request resent with a new idempotency key is the same event", async () => {
+  const body = '{"order":"captured"}';
+  const headers = { "content-type": "application/json", ...signatureHeaders(body) };
+  const first = await (await post("/hooks/demo", body, { ...headers, "idempotency-key": "evt-real" })).json();
+  const res = await post("/hooks/demo", body, { ...headers, "idempotency-key": "evt-forged" });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { id: first.id, duplicate: true });
+});
+
+test("a sender retry re-signed with a new timestamp still dedupes on its key", async () => {
+  const body = '{"order":"retried"}';
+  const key = { "idempotency-key": "evt-retry" };
+  const earlier = signatureHeaders(body, nowSeconds() - 60);
+  const first = await (await post("/hooks/demo", body, { ...earlier, ...key })).json();
+  const res = await post("/hooks/demo", body, { ...signatureHeaders(body), ...key });
+  assert.deepEqual(await res.json(), { id: first.id, duplicate: true });
+});
+
+test("the same body under different timestamps and keys is two events", async () => {
+  const body = '{"ping":true}';
+  const send = (timestamp: number, key: string) =>
+    post("/hooks/demo", body, { ...signatureHeaders(body, timestamp), "idempotency-key": key }).then((r) => r.json());
+  const a = await send(nowSeconds() - 1, "p1");
+  const b = await send(nowSeconds(), "p2");
+  assert.notEqual(a.id, b.id);
+  assert.equal(b.duplicate, false);
+});
+
 test("concurrent deliveries of one event create a single row", async () => {
   const results = await Promise.all(
     Array.from({ length: 10 }, () => signed("{}", { "idempotency-key": "evt-race" }).then((r) => r.json())),

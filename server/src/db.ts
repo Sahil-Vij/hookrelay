@@ -6,6 +6,11 @@ export interface NewEvent {
   idempotencyKey: string | undefined;
   contentType: string | undefined;
   body: Buffer;
+  /**
+   * The verified signature header. A signature covers the timestamp and body but not the idempotency key, so a
+   * repeat of it is the same request resent, whatever key it now carries.
+   */
+  signature?: string;
   /** Where to forward this event. Without one, the event is only stored. */
   targetUrl?: string;
 }
@@ -60,7 +65,7 @@ export interface AttemptResult {
 }
 
 export interface Store {
-  /** Saves an event once. Returns the existing event if this key was already seen for the source. */
+  /** Saves an event once. Returns the existing event if this key or signature was already seen for the source. */
   saveEvent(event: NewEvent): { id: number; duplicate: boolean };
   dueDeliveries(now: number, limit: number): DueDelivery[];
   markDelivered(id: number, result: AttemptResult): void;
@@ -124,13 +129,22 @@ export function openStore(path: string): Store {
     );
     CREATE INDEX IF NOT EXISTS deliveries_due ON deliveries (status, next_attempt_at);
   `);
-  // Relies on the UNIQUE constraint rather than check-then-insert, so concurrent retries can't both win.
+  // Databases created before signatures were stored don't have the column yet. Old rows keep NULL, which a
+  // UNIQUE index allows any number of.
+  const columns = db.prepare("SELECT name FROM pragma_table_info('events')").all() as { name: string }[];
+  if (!columns.some((c) => c.name === "signature")) db.exec("ALTER TABLE events ADD COLUMN signature TEXT");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_signature ON events (source, signature)");
+  // Relies on the UNIQUE constraints rather than check-then-insert, so concurrent retries can't both win.
+  // No conflict target, so a clash on either the key or the signature counts as a duplicate.
   const insertEvent = db.prepare(`
-    INSERT INTO events (source, idempotency_key, content_type, body) VALUES (?, ?, ?, ?)
-    ON CONFLICT (source, idempotency_key) DO NOTHING
+    INSERT INTO events (source, idempotency_key, content_type, body, signature) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT DO NOTHING
     RETURNING id
   `);
-  const findEvent = db.prepare("SELECT id FROM events WHERE source = ? AND idempotency_key = ?");
+  const findEvent = db.prepare(`
+    SELECT id FROM events WHERE source = :source AND (idempotency_key = :key OR signature = :signature)
+    ORDER BY id LIMIT 1
+  `);
   const insertDelivery = db.prepare("INSERT INTO deliveries (event_id, target_url) VALUES (?, ?)");
   const selectDue = db.prepare(`
     SELECT d.id, d.event_id AS eventId, e.source, d.target_url AS targetUrl, d.attempts,
@@ -194,13 +208,17 @@ export function openStore(path: string): Store {
   };
 
   return {
-    saveEvent({ source, idempotencyKey, contentType, body, targetUrl }) {
+    saveEvent({ source, idempotencyKey, contentType, body, signature, targetUrl }) {
       // Without a sender-supplied key, identical bodies count as the same event.
       const key = idempotencyKey ?? `sha256:${createHash("sha256").update(body).digest("hex")}`;
       // One transaction, so a stored event can never be left without its delivery.
       return transaction(() => {
-        const inserted = insertEvent.get(source, key, contentType ?? null, body) as { id: number } | undefined;
-        const id = Number(inserted ? inserted.id : (findEvent.get(source, key) as { id: number }).id);
+        const inserted = insertEvent.get(source, key, contentType ?? null, body, signature ?? null) as
+          | { id: number }
+          | undefined;
+        const id = Number(
+          inserted ? inserted.id : (findEvent.get({ source, key, signature: signature ?? null }) as { id: number }).id,
+        );
         if (inserted && targetUrl) insertDelivery.run(id, targetUrl);
         return { id, duplicate: !inserted };
       });

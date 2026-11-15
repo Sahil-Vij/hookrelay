@@ -40,7 +40,8 @@ curl -i localhost:4000/hooks/demo -H "x-hookrelay-timestamp: $TS" -H "x-hookrela
 
 The sender signs `<timestamp>.<body>` with HMAC-SHA256, where the timestamp is Unix seconds and is sent in
 `x-hookrelay-timestamp`. Requests more than 5 minutes old or ahead are rejected, so a captured request can't be replayed
-later. Set `HOOKRELAY_SIGNATURE_TOLERANCE_SECONDS` to change the window.
+later. Set `HOOKRELAY_SIGNATURE_TOLERANCE_SECONDS` to change the window. Inside the window, a request whose signature was
+already seen is treated as a duplicate even if its `idempotency-key` changed, since that header isn't signed.
 
 | Response | Meaning |
 | --- | --- |
